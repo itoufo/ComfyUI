@@ -1,3 +1,6 @@
+import zipfile
+from io import BytesIO
+
 from typing_extensions import override
 
 from comfy_api.latest import IO, ComfyExtension, Input, Types
@@ -15,6 +18,8 @@ from comfy_api_nodes.apis.hunyuan3d import (
 )
 from comfy_api_nodes.util import (
     ApiEndpoint,
+    bytesio_to_image_tensor,
+    download_url_to_bytesio,
     download_url_to_file_3d,
     download_url_to_image_tensor,
     downscale_image_tensor_by_max_side,
@@ -33,6 +38,29 @@ def _is_tencent_rate_limited(status: int, body: object) -> bool:
         and isinstance(body, dict)
         and "RequestLimitExceeded" in str(body.get("Response", {}).get("Error", {}).get("Code", ""))
     )
+
+
+async def download_and_extract_obj_zip(url: str) -> tuple[Types.File3D, Input.Image | None]:
+    """The Tencent API returns OBJ results as ZIP archives containing the .obj mesh, and a texture image."""
+    data = BytesIO()
+    await download_url_to_bytesio(url, data)
+    data.seek(0)
+    if not zipfile.is_zipfile(data):
+        data.seek(0)
+        return Types.File3D(source=data, file_format="obj"), None
+    data.seek(0)
+    obj_bytes = None
+    texture_tensor = None
+    with zipfile.ZipFile(data) as zf:
+        for name in zf.namelist():
+            lower = name.lower()
+            if lower.endswith(".obj"):
+                obj_bytes = zf.read(name)
+            elif any(lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp")):
+                texture_tensor = bytesio_to_image_tensor(BytesIO(zf.read(name)), mode="RGB")
+    if obj_bytes is None:
+        raise ValueError("ZIP archive does not contain an OBJ file.")
+    return Types.File3D(source=BytesIO(obj_bytes), file_format="obj"), texture_tensor
 
 
 def get_file_from_response(
@@ -92,6 +120,7 @@ class TencentTextToModelNode(IO.ComfyNode):
                 IO.String.Output(display_name="model_file"),  # for backward compatibility only
                 IO.File3DGLB.Output(display_name="GLB"),
                 IO.File3DOBJ.Output(display_name="OBJ"),
+                IO.Image.Output(display_name="texture_image"),
             ],
             hidden=[
                 IO.Hidden.auth_token_comfy_org,
@@ -150,14 +179,16 @@ class TencentTextToModelNode(IO.ComfyNode):
             response_model=To3DProTaskResultResponse,
             status_extractor=lambda r: r.Status,
         )
+        obj_file, texture_image = await download_and_extract_obj_zip(
+            get_file_from_response(result.ResultFile3Ds, "obj").Url
+        )
         return IO.NodeOutput(
             f"{task_id}.glb",
             await download_url_to_file_3d(
                 get_file_from_response(result.ResultFile3Ds, "glb").Url, "glb", task_id=task_id
             ),
-            await download_url_to_file_3d(
-                get_file_from_response(result.ResultFile3Ds, "obj").Url, "obj", task_id=task_id
-            ),
+            obj_file,
+            texture_image,
         )
 
 
@@ -210,6 +241,7 @@ class TencentImageToModelNode(IO.ComfyNode):
                 IO.String.Output(display_name="model_file"),  # for backward compatibility only
                 IO.File3DGLB.Output(display_name="GLB"),
                 IO.File3DOBJ.Output(display_name="OBJ"),
+                IO.Image.Output(display_name="texture_image"),
             ],
             hidden=[
                 IO.Hidden.auth_token_comfy_org,
@@ -303,14 +335,16 @@ class TencentImageToModelNode(IO.ComfyNode):
             response_model=To3DProTaskResultResponse,
             status_extractor=lambda r: r.Status,
         )
+        obj_file, texture_image = await download_and_extract_obj_zip(
+            get_file_from_response(result.ResultFile3Ds, "obj").Url
+        )
         return IO.NodeOutput(
             f"{task_id}.glb",
             await download_url_to_file_3d(
                 get_file_from_response(result.ResultFile3Ds, "glb").Url, "glb", task_id=task_id
             ),
-            await download_url_to_file_3d(
-                get_file_from_response(result.ResultFile3Ds, "obj").Url, "obj", task_id=task_id
-            ),
+            obj_file,
+            texture_image,
         )
 
 

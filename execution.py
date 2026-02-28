@@ -215,6 +215,41 @@ def get_input_data(inputs, class_def, unique_id, execution_list=None, dynprompt=
     v3_data["hidden_inputs"] = hidden_inputs_v3
     return input_data_all, missing_keys, v3_data
 
+def validate_resolved_inputs(input_data_all, class_def, inputs):
+    """Validate resolved input values against schema constraints.
+
+    This catches minLength/maxLength violations for linked inputs
+    that bypass validate_inputs() (where only direct widget values are checked).
+    """
+    is_v3 = issubclass(class_def, _ComfyNodeInternal)
+    valid_inputs = class_def.INPUT_TYPES()
+    if is_v3:
+        valid_inputs, _, _ = _io.get_finalized_class_inputs(valid_inputs, inputs)
+
+    for x, values in input_data_all.items():
+        input_type, input_category, extra_info = get_input_info(class_def, x, valid_inputs)
+        if extra_info is None:
+            continue
+        if input_type != "STRING":
+            continue
+        min_length = extra_info.get("minLength")
+        max_length = extra_info.get("maxLength")
+        if min_length is None and max_length is None:
+            continue
+        for val in values:
+            if val is None or not isinstance(val, str):
+                continue
+            if min_length is not None and len(val.strip()) < min_length:
+                raise ValueError(
+                    f"Input '{x}': value length {len(val.strip())} is shorter than "
+                    f"minimum length of {min_length}"
+                )
+            if max_length is not None and len(val) > max_length:
+                raise ValueError(
+                    f"Input '{x}': value length {len(val)} is longer than "
+                    f"maximum length of {max_length}"
+                )
+
 map_node_over_list = None #Don't hook this please
 
 async def resolve_map_node_over_list_results(results):
@@ -497,6 +532,8 @@ async def execute(server, dynprompt, caches, current_item, extra_data, executed,
                     for i in required_inputs:
                         execution_list.make_input_strong_link(unique_id, i)
                     return (ExecutionResult.PENDING, None, None)
+
+            validate_resolved_inputs(input_data_all, class_def, inputs)
 
             def execution_block_cb(block):
                 if block.message is not None:

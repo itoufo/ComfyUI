@@ -1,6 +1,7 @@
 import zipfile
 from io import BytesIO
 
+import torch
 from typing_extensions import override
 
 from comfy_api.latest import IO, ComfyExtension, Input, Types
@@ -40,27 +41,66 @@ def _is_tencent_rate_limited(status: int, body: object) -> bool:
     )
 
 
-async def download_and_extract_obj_zip(url: str) -> tuple[Types.File3D, Input.Image | None]:
-    """The Tencent API returns OBJ results as ZIP archives containing the .obj mesh, and a texture image."""
+class ObjZipResult:
+    __slots__ = ("obj", "texture", "metallic", "normal", "roughness")
+
+    def __init__(
+        self,
+        obj: Types.File3D,
+        texture: Input.Image | None = None,
+        metallic: Input.Image | None = None,
+        normal: Input.Image | None = None,
+        roughness: Input.Image | None = None,
+    ):
+        self.obj = obj
+        self.texture = texture
+        self.metallic = metallic
+        self.normal = normal
+        self.roughness = roughness
+
+
+async def download_and_extract_obj_zip(url: str) -> ObjZipResult:
+    """The Tencent API returns OBJ results as ZIP archives containing the .obj mesh, and texture images.
+
+    When PBR is enabled, the ZIP may contain additional metallic, normal, and roughness maps
+    identified by their filename suffixes.
+    """
     data = BytesIO()
     await download_url_to_bytesio(url, data)
     data.seek(0)
     if not zipfile.is_zipfile(data):
         data.seek(0)
-        return Types.File3D(source=data, file_format="obj"), None
+        return ObjZipResult(obj=Types.File3D(source=data, file_format="obj"))
     data.seek(0)
     obj_bytes = None
-    texture_tensor = None
+    textures: dict[str, Input.Image] = {}
     with zipfile.ZipFile(data) as zf:
         for name in zf.namelist():
             lower = name.lower()
             if lower.endswith(".obj"):
                 obj_bytes = zf.read(name)
             elif any(lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp")):
-                texture_tensor = bytesio_to_image_tensor(BytesIO(zf.read(name)), mode="RGB")
+                stem = lower.rsplit(".", 1)[0]
+                tensor = bytesio_to_image_tensor(BytesIO(zf.read(name)), mode="RGB")
+                matched_key = "texture"
+                for suffix, key in {
+                    "_metallic": "metallic",
+                    "_normal": "normal",
+                    "_roughness": "roughness",
+                }.items():
+                    if stem.endswith(suffix):
+                        matched_key = key
+                        break
+                textures[matched_key] = tensor
     if obj_bytes is None:
         raise ValueError("ZIP archive does not contain an OBJ file.")
-    return Types.File3D(source=BytesIO(obj_bytes), file_format="obj"), texture_tensor
+    return ObjZipResult(
+        obj=Types.File3D(source=BytesIO(obj_bytes), file_format="obj"),
+        texture=textures.get("texture"),
+        metallic=textures.get("metallic"),
+        normal=textures.get("normal"),
+        roughness=textures.get("roughness"),
+    )
 
 
 def get_file_from_response(
@@ -179,16 +219,14 @@ class TencentTextToModelNode(IO.ComfyNode):
             response_model=To3DProTaskResultResponse,
             status_extractor=lambda r: r.Status,
         )
-        obj_file, texture_image = await download_and_extract_obj_zip(
-            get_file_from_response(result.ResultFile3Ds, "obj").Url
-        )
+        obj_result = await download_and_extract_obj_zip(get_file_from_response(result.ResultFile3Ds, "obj").Url)
         return IO.NodeOutput(
             f"{task_id}.glb",
             await download_url_to_file_3d(
                 get_file_from_response(result.ResultFile3Ds, "glb").Url, "glb", task_id=task_id
             ),
-            obj_file,
-            texture_image,
+            obj_result.obj,
+            obj_result.texture,
         )
 
 
@@ -242,6 +280,9 @@ class TencentImageToModelNode(IO.ComfyNode):
                 IO.File3DGLB.Output(display_name="GLB"),
                 IO.File3DOBJ.Output(display_name="OBJ"),
                 IO.Image.Output(display_name="texture_image"),
+                IO.Image.Output(display_name="optional_metallic"),
+                IO.Image.Output(display_name="optional_normal"),
+                IO.Image.Output(display_name="optional_roughness"),
             ],
             hidden=[
                 IO.Hidden.auth_token_comfy_org,
@@ -335,16 +376,17 @@ class TencentImageToModelNode(IO.ComfyNode):
             response_model=To3DProTaskResultResponse,
             status_extractor=lambda r: r.Status,
         )
-        obj_file, texture_image = await download_and_extract_obj_zip(
-            get_file_from_response(result.ResultFile3Ds, "obj").Url
-        )
+        obj_result = await download_and_extract_obj_zip(get_file_from_response(result.ResultFile3Ds, "obj").Url)
         return IO.NodeOutput(
             f"{task_id}.glb",
             await download_url_to_file_3d(
                 get_file_from_response(result.ResultFile3Ds, "glb").Url, "glb", task_id=task_id
             ),
-            obj_file,
-            texture_image,
+            obj_result.obj,
+            obj_result.texture,
+            obj_result.metallic if obj_result.metallic is not None else torch.zeros(1, 1, 1, 3),
+            obj_result.normal if obj_result.normal is not None else torch.zeros(1, 1, 1, 3),
+            obj_result.roughness if obj_result.roughness is not None else torch.zeros(1, 1, 1, 3),
         )
 
 

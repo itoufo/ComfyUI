@@ -19,7 +19,7 @@ from .models import (
     ResultResponse,
     StatusResponse,
 )
-from .proxy import close_client, get_image, get_history, get_queue, get_system_stats, health_check, post_interrupt, post_prompt
+from .proxy import close_client, get_image, get_history, get_object_info, get_queue, get_system_stats, health_check, post_interrupt, post_prompt
 from .rate_limiter import rate_limiter
 from .validators import validate_filename, validate_workflow
 from .workflows.flux_dev import build_workflow
@@ -229,6 +229,28 @@ async def cancel(prompt_id: str):
         return CancelResponse(cancelled=True)
     except Exception as exc:
         logger.error("Failed to cancel: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": f"ComfyUI error: {exc}"},
+        )
+
+
+# --- Object Info ---
+
+@app.get(
+    "/object_info",
+    dependencies=[Depends(require_api_key), Depends(rate_limiter)],
+)
+@app.get(
+    "/object_info/{node_class}",
+    dependencies=[Depends(require_api_key), Depends(rate_limiter)],
+)
+async def object_info(node_class: str | None = None):
+    try:
+        data = await get_object_info(node_class)
+        return data
+    except Exception as exc:
+        logger.error("Failed to fetch object_info: %s", exc)
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={"detail": f"ComfyUI error: {exc}"},

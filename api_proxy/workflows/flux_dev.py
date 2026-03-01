@@ -27,14 +27,14 @@ def build_workflow(
         "1": {
             "class_type": "UnetLoaderGGUF",
             "inputs": {
-                "unet_name": "flux1-dev-Q4_K_S.gguf",
+                "unet_name": "flux1-dev-Q5_K_S.gguf",
             },
         },
         # Dual CLIP loader (GGUF) - Flux uses two text encoders
         "2": {
             "class_type": "DualCLIPLoaderGGUF",
             "inputs": {
-                "clip_name1": "t5-v1_1-xxl-encoder-Q4_K_M.gguf",
+                "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
                 "clip_name2": "clip_l.safetensors",
                 "type": "flux",
             },

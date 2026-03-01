@@ -10,8 +10,6 @@ from .config import settings
 BLOCKED_NODES: set[str] = {
     "LoadImage",         # filesystem access
     "LoadImageMask",     # filesystem access
-    "SaveImage",         # we replace with our controlled version
-    "PreviewImage",      # we replace with our controlled version
     "UploadImage",       # filesystem write
     "LoadImageFromUrl",  # SSRF risk
     "PythonModule",      # arbitrary code

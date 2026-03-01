@@ -81,6 +81,14 @@ async def post_interrupt(prompt_id: str | None = None) -> dict:
     return {"interrupted": True}
 
 
+async def get_object_info(node_class: str | None = None) -> dict:
+    client = await get_client()
+    path = f"/object_info/{node_class}" if node_class else "/object_info"
+    resp = await client.get(path)
+    resp.raise_for_status()
+    return resp.json()
+
+
 async def health_check() -> bool:
     """Check if ComfyUI is reachable."""
     try:

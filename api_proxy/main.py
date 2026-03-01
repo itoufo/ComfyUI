@@ -86,6 +86,24 @@ async def health():
     )
 
 
+# --- System Stats ---
+
+@app.get(
+    "/system_stats",
+    dependencies=[Depends(require_api_key), Depends(rate_limiter)],
+)
+async def system_stats():
+    try:
+        data = await get_system_stats()
+        return data
+    except Exception as exc:
+        logger.error("Failed to fetch system_stats: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": f"ComfyUI error: {exc}"},
+        )
+
+
 # --- Generate ---
 
 @app.post(

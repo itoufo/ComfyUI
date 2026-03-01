@@ -278,9 +278,13 @@ async def object_info(node_class: str | None = None):
 # --- WebSocket ---
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    token: str = Query(default=None),
+    clientId: str = Query(default=None),
+):
     # Authenticate via query parameter
-    if not hmac.compare_digest(token, settings.API_KEY):
+    if token is None or not hmac.compare_digest(token, settings.API_KEY):
         await websocket.close(code=4001, reason="Unauthorized")
         return
     await websocket.accept()

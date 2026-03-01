@@ -148,6 +148,39 @@ async def generate(req: GenerateRequest):
     return GenerateResponse(prompt_id=result["prompt_id"])
 
 
+# --- /prompt (ComfyUI-compatible alias) ---
+
+@app.post(
+    "/prompt",
+    dependencies=[Depends(require_api_key), Depends(rate_limiter)],
+)
+async def prompt_alias(request: Request):
+    """ComfyUI-compatible /prompt endpoint. Accepts {"prompt": {...}, "client_id": "..."}."""
+    body = await request.json()
+    workflow = body.get("prompt", {})
+    client_id = body.get("client_id")
+
+    if not isinstance(workflow, dict) or not workflow:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "Missing or invalid 'prompt' field"},
+        )
+
+    validate_workflow(workflow)
+
+    try:
+        result = await post_prompt(workflow, client_id=client_id)
+    except Exception as exc:
+        logger.error("ComfyUI prompt submission failed: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": f"ComfyUI error: {exc}"},
+        )
+
+    # Return ComfyUI-native response format
+    return result
+
+
 # --- Status ---
 
 @app.get(
@@ -247,6 +280,68 @@ async def cancel(prompt_id: str):
         return CancelResponse(cancelled=True)
     except Exception as exc:
         logger.error("Failed to cancel: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": f"ComfyUI error: {exc}"},
+        )
+
+
+# --- /history (ComfyUI-compatible) ---
+
+@app.get(
+    "/history/{prompt_id}",
+    dependencies=[Depends(require_api_key), Depends(rate_limiter)],
+)
+async def history_alias(prompt_id: str):
+    try:
+        data = await get_history(prompt_id)
+        return data
+    except Exception as exc:
+        logger.error("Failed to fetch history: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": f"ComfyUI error: {exc}"},
+        )
+
+
+# --- /view (ComfyUI-compatible image endpoint) ---
+
+@app.get(
+    "/view",
+    dependencies=[Depends(require_api_key), Depends(rate_limiter)],
+)
+async def view_alias(
+    filename: str = Query(...),
+    subfolder: str = Query(default=""),
+    type: str = Query(default="output", pattern="^(output|input|temp)$"),
+):
+    validate_filename(filename)
+    if subfolder:
+        validate_filename(subfolder)
+    try:
+        resp = await get_image(filename, subfolder, type)
+    except Exception as exc:
+        logger.error("Failed to fetch image: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": f"ComfyUI error: {exc}"},
+        )
+    content_type = resp.headers.get("content-type", "image/png")
+    return Response(content=resp.content, media_type=content_type)
+
+
+# --- /queue (ComfyUI-compatible) ---
+
+@app.get(
+    "/queue",
+    dependencies=[Depends(require_api_key), Depends(rate_limiter)],
+)
+async def queue_alias():
+    try:
+        data = await get_queue()
+        return data
+    except Exception as exc:
+        logger.error("Failed to fetch queue: %s", exc)
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={"detail": f"ComfyUI error: {exc}"},
